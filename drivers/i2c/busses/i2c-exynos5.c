@@ -202,6 +202,7 @@ struct exynos5_i2c {
 
 	/* Controller operating frequency */
 	unsigned int		op_clock;
+	bool			stop_after_trans;
 
 	/* Version of HS-I2C Hardware */
 	const struct exynos_hsi2c_variant *variant;
@@ -211,6 +212,9 @@ struct exynos5_i2c {
  * struct exynos_hsi2c_variant - platform specific HSI2C driver data
  * @fifo_depth: the fifo depth supported by the HSI2C module
  * @hw: the hardware variant of Exynos I2C controller
+ * @no_i2c_func_mode: do not set the legacy I2C function-mode bit
+ * @encoded_timing: program the encoded Exynos9810 timing fields
+ * @separate_master_run: start transfers with a separate MASTER_RUN write
  *
  * Specifies platform specific configuration of HSI2C module.
  * Note: A structure for driver specific platform data is used for future
@@ -219,6 +223,9 @@ struct exynos5_i2c {
 struct exynos_hsi2c_variant {
 	unsigned int		fifo_depth;
 	enum i2c_type_exynos	hw;
+	bool			no_i2c_func_mode;
+	bool			encoded_timing;
+	bool			separate_master_run;
 };
 
 static const struct exynos_hsi2c_variant exynos5250_hsi2c_data = {
@@ -246,6 +253,14 @@ static const struct exynos_hsi2c_variant exynos8895_hsi2c_data = {
 	.hw		= I2C_TYPE_EXYNOS8895,
 };
 
+static const struct exynos_hsi2c_variant exynos9810_hsi2c_data = {
+	.fifo_depth		= 64,
+	.hw			= I2C_TYPE_EXYNOS8895,
+	.no_i2c_func_mode	= true,
+	.encoded_timing		= true,
+	.separate_master_run	= true,
+};
+
 static const struct of_device_id exynos5_i2c_match[] = {
 	{
 		.compatible = "samsung,exynos5-hsi2c",
@@ -263,6 +278,9 @@ static const struct of_device_id exynos5_i2c_match[] = {
 		.compatible = "samsung,exynosautov9-hsi2c",
 		.data = &exynosautov9_hsi2c_data
 	}, {
+		.compatible = "samsung,exynos9810-hsi2c",
+		.data = &exynos9810_hsi2c_data
+	}, {
 		.compatible = "samsung,exynos8895-hsi2c",
 		.data = &exynos8895_hsi2c_data
 	}, {},
@@ -273,6 +291,66 @@ static void exynos5_i2c_clr_pend_irq(struct exynos5_i2c *i2c)
 {
 	writel(readl(i2c->regs + HSI2C_INT_STATUS),
 				i2c->regs + HSI2C_INT_STATUS);
+}
+
+/*
+ * Exynos9810 uses encoded SCL phase fields rather than the numeric phase
+ * lengths used by the upstream Exynos8895 timing calculation.  Keep this
+ * sequence aligned with Samsung's Exynos9810 HSI2C driver.
+ */
+static int exynos9810_i2c_set_timing(struct exynos5_i2c *i2c,
+				     bool hs_timings)
+{
+	unsigned int clkin = clk_get_rate(i2c->clk);
+	unsigned int op_clk = hs_timings ? i2c->op_clock :
+		(i2c->op_clock >= I2C_MAX_FAST_MODE_PLUS_FREQ) ?
+		I2C_MAX_FAST_MODE_FREQ : i2c->op_clock;
+	unsigned int factor = hs_timings ? 7 : 9;
+	unsigned int div, phase, start_hold;
+	u32 val;
+
+	if (!clkin || !op_clk)
+		return -EINVAL;
+
+	div = clkin / (op_clk * 15);
+	if (div > 0xff)
+		return -EINVAL;
+
+	phase = factor * (clkin / 1000000) / ((div + 1) * 10);
+	if (phase > 7)
+		phase = 7;
+
+	start_hold = phase ? phase - 1 : 7;
+	phase = (0xff << phase) & 0xff;
+	start_hold = (0xff << start_hold) & 0xff;
+
+	if (hs_timings) {
+		val = readl(i2c->regs + HSI2C_TIMING_HS3);
+		val = (val & ~GENMASK(23, 16)) | (div << 16);
+		writel(val, i2c->regs + HSI2C_TIMING_HS3);
+
+		val = readl(i2c->regs + HSI2C_TIMING_HS2);
+		val = (val & ~GENMASK(7, 0)) | phase;
+		writel(val, i2c->regs + HSI2C_TIMING_HS2);
+
+		val = readl(i2c->regs + HSI2C_TIMING_HS1);
+		val = (val & ~GENMASK(23, 16)) | (start_hold << 16);
+		writel(val, i2c->regs + HSI2C_TIMING_HS1);
+	} else {
+		val = readl(i2c->regs + HSI2C_TIMING_FS3);
+		val = (val & ~GENMASK(23, 16)) | (div << 16);
+		writel(val, i2c->regs + HSI2C_TIMING_FS3);
+
+		val = readl(i2c->regs + HSI2C_TIMING_FS2);
+		val = (val & ~GENMASK(7, 0)) | phase;
+		writel(val, i2c->regs + HSI2C_TIMING_FS2);
+
+		val = readl(i2c->regs + HSI2C_TIMING_FS1);
+		val = (val & ~GENMASK(23, 16)) | (start_hold << 16);
+		writel(val, i2c->regs + HSI2C_TIMING_FS1);
+	}
+
+	return 0;
 }
 
 /*
@@ -302,6 +380,9 @@ static int exynos5_i2c_set_timing(struct exynos5_i2c *i2c, bool hs_timings)
 		(i2c->op_clock >= I2C_MAX_FAST_MODE_PLUS_FREQ) ? I2C_MAX_STANDARD_MODE_FREQ :
 		i2c->op_clock;
 	int div, clk_cycle, temp;
+
+	if (i2c->variant->encoded_timing)
+		return exynos9810_i2c_set_timing(i2c, hs_timings);
 
 	/*
 	 * In case of HSI2C controllers in ExynosAutoV9:
@@ -454,13 +535,15 @@ static void exynos5_i2c_init(struct exynos5_i2c *i2c)
 {
 	u32 i2c_conf = readl(i2c->regs + HSI2C_CONF);
 	u32 i2c_timeout = readl(i2c->regs + HSI2C_TIMEOUT);
+	u32 i2c_ctl = HSI2C_MASTER;
 
 	/* Clear to disable Timeout */
 	i2c_timeout &= ~HSI2C_TIMEOUT_EN;
 	writel(i2c_timeout, i2c->regs + HSI2C_TIMEOUT);
 
-	writel((HSI2C_FUNC_MODE_I2C | HSI2C_MASTER),
-					i2c->regs + HSI2C_CTL);
+	if (!i2c->variant->no_i2c_func_mode)
+		i2c_ctl |= HSI2C_FUNC_MODE_I2C;
+	writel(i2c_ctl, i2c->regs + HSI2C_CTL);
 	writel(HSI2C_TRAILING_COUNT, i2c->regs + HSI2C_TRAILIG_CTL);
 
 	if (i2c->op_clock >= I2C_MAX_FAST_MODE_PLUS_FREQ) {
@@ -763,9 +846,13 @@ static void exynos5_i2c_message_start(struct exynos5_i2c *i2c, int stop)
 	spin_lock_irqsave(&i2c->lock, flags);
 	writel(int_en, i2c->regs + HSI2C_INT_ENABLE);
 
-	if (stop == 1)
+	if (stop == 1 || i2c->stop_after_trans)
 		i2c_auto_conf |= HSI2C_STOP_AFTER_TRANS;
 	i2c_auto_conf |= i2c->msg->len;
+	if (i2c->variant->separate_master_run) {
+		writel(i2c_auto_conf, i2c->regs + HSI2C_AUTO_CONF);
+		i2c_auto_conf = readl(i2c->regs + HSI2C_AUTO_CONF);
+	}
 	i2c_auto_conf |= HSI2C_MASTER_RUN;
 	writel(i2c_auto_conf, i2c->regs + HSI2C_AUTO_CONF);
 	spin_unlock_irqrestore(&i2c->lock, flags);
@@ -785,6 +872,47 @@ static bool exynos5_i2c_poll_irqs_timeout(struct exynos5_i2c *i2c,
 		usleep_range(100, 200);
 	}
 	return time_before(jiffies, time_left);
+}
+
+static void exynos9810_i2c_dump_clock_state(struct exynos5_i2c *i2c)
+{
+	void __iomem *cmu;
+	void __iomem *pinctrl;
+	void __iomem *sysreg;
+	void __iomem *usi;
+
+	cmu = ioremap(0x10400000, 0x4000);
+	if (!cmu)
+		return;
+
+	dev_warn(i2c->dev,
+		 "PERIC0 clocks: bus_mux=%08x ip_mux=%08x div=%08x src=%08x rst=%08x ip=%08x pclk=%08x sys_qch=%08x usi_qch=%08x\n",
+		 readl(cmu + 0x0100), readl(cmu + 0x0120),
+		 readl(cmu + 0x1810), readl(cmu + 0x2018),
+		 readl(cmu + 0x206c), readl(cmu + 0x20dc),
+		 readl(cmu + 0x20e0), readl(cmu + 0x3014),
+		 readl(cmu + 0x3038));
+
+	iounmap(cmu);
+
+	pinctrl = ioremap(0x10430000, 0x100);
+	if (pinctrl) {
+		dev_warn(i2c->dev,
+			 "GPP1 state: con=%08x dat=%08x pud=%08x drv=%08x\n",
+			 readl(pinctrl + 0x20), readl(pinctrl + 0x24),
+			 readl(pinctrl + 0x28), readl(pinctrl + 0x2c));
+		iounmap(pinctrl);
+	}
+
+	sysreg = ioremap(0x1041101c, 4);
+	usi = ioremap(0x104b00c0, 0xc);
+	if (sysreg && usi)
+		dev_warn(i2c->dev, "USI state: sw_conf=%08x con=%08x option=%08x\n",
+			 readl(sysreg), readl(usi + 0x4), readl(usi + 0x8));
+	if (usi)
+		iounmap(usi);
+	if (sysreg)
+		iounmap(sysreg);
 }
 
 static int exynos5_i2c_xfer_msg(struct exynos5_i2c *i2c,
@@ -821,6 +949,32 @@ static int exynos5_i2c_xfer_msg(struct exynos5_i2c *i2c,
 		ret = exynos5_i2c_wait_bus_idle(i2c);
 
 	if (ret < 0) {
+		if (ret == -ETIMEDOUT &&
+		    of_device_is_compatible(i2c->dev->of_node,
+					    "samsung,exynos9810-hsi2c")) {
+			dev_warn(i2c->dev,
+				 "timeout state: ctl=%08x fifo_ctl=%08x int_en=%08x int_stat=%08x err=%08x fifo=%08x conf=%08x auto=%08x trans=%08x\n",
+				 readl(i2c->regs + HSI2C_CTL),
+				 readl(i2c->regs + HSI2C_FIFO_CTL),
+				 readl(i2c->regs + HSI2C_INT_ENABLE),
+				 readl(i2c->regs + HSI2C_INT_STATUS),
+				 readl(i2c->regs + HSI2C_ERR_STATUS),
+				 readl(i2c->regs + HSI2C_FIFO_STATUS),
+				 readl(i2c->regs + HSI2C_CONF),
+				 readl(i2c->regs + HSI2C_AUTO_CONF),
+				 readl(i2c->regs + HSI2C_TRANS_STATUS));
+			dev_warn(i2c->dev,
+				 "timing state: hs1=%08x hs2=%08x hs3=%08x fs1=%08x fs2=%08x fs3=%08x sla=%08x addr=%08x\n",
+				 readl(i2c->regs + HSI2C_TIMING_HS1),
+				 readl(i2c->regs + HSI2C_TIMING_HS2),
+				 readl(i2c->regs + HSI2C_TIMING_HS3),
+				 readl(i2c->regs + HSI2C_TIMING_FS1),
+				 readl(i2c->regs + HSI2C_TIMING_FS2),
+				 readl(i2c->regs + HSI2C_TIMING_FS3),
+				 readl(i2c->regs + HSI2C_TIMING_SLA),
+				 readl(i2c->regs + HSI2C_ADDR));
+			exynos9810_i2c_dump_clock_state(i2c);
+		}
 		exynos5_i2c_reset(i2c);
 		if (ret == -ETIMEDOUT)
 			dev_warn(i2c->dev, "%s timeout\n",
@@ -896,6 +1050,8 @@ static int exynos5_i2c_probe(struct platform_device *pdev)
 
 	if (of_property_read_u32(np, "clock-frequency", &i2c->op_clock))
 		i2c->op_clock = I2C_MAX_STANDARD_MODE_FREQ;
+	i2c->stop_after_trans =
+		of_property_read_bool(np, "samsung,stop-after-trans");
 
 	strscpy(i2c->adap.name, "exynos5-i2c", sizeof(i2c->adap.name));
 	i2c->adap.owner   = THIS_MODULE;
