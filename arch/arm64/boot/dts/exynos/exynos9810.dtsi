@@ -6,7 +6,9 @@
  * Copyright (c) 2024 Maksym Holovach <nergzd@nergzd723.xyz>
  */
 
+#include <dt-bindings/clock/samsung,exynos9810.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/soc/samsung,exynos-usi.h>
 
 / {
 	compatible = "samsung,exynos9810";
@@ -25,6 +27,14 @@
 		pinctrl6 = &pinctrl_peric0;
 		pinctrl7 = &pinctrl_peric1;
 		pinctrl8 = &pinctrl_vts;
+	};
+
+	firmware {
+		acpm_ipc: power-management {
+			compatible = "samsung,exynos9810-acpm-ipc";
+			mboxes = <&ap2apm_mailbox>;
+			shmem = <&apm_sram>;
+		};
 	};
 
 	cpus {
@@ -126,6 +136,21 @@
 		clock-output-names = "oscclk";
 	};
 
+	/* TODO: Replace with CMU_TOP clocks once it is supported. */
+	peric0_bus_clk: peric0-bus-clock {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <200000000>;
+		clock-output-names = "peric0_bus";
+	};
+
+	peric0_ip_clk: peric0-ip-clock {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <200000000>;
+		clock-output-names = "peric0_ip";
+	};
+
 	pmu-a55 {
 		compatible = "arm,cortex-a55-pmu";
 		interrupts = <GIC_SPI 144 IRQ_TYPE_LEVEL_HIGH>,
@@ -165,6 +190,19 @@
 		#address-cells = <1>;
 		#size-cells = <1>;
 
+		apm_sram: sram@2039000 {
+			reg = <0x02039000 0x30000>;
+		};
+
+		ap2apm_mailbox: mailbox@14100000 {
+			compatible = "samsung,exynos9810-mbox";
+			reg = <0x14100000 0x1000>;
+			clocks = <&oscclk>;
+			clock-names = "pclk";
+			interrupts = <GIC_SPI 68 IRQ_TYPE_LEVEL_HIGH>;
+			#mbox-cells = <0>;
+		};
+
 		chipid@10000000 {
 			compatible = "samsung,exynos9810-chipid",
 				     "samsung,exynos850-chipid";
@@ -191,16 +229,93 @@
 			interrupts = <GIC_SPI 396 IRQ_TYPE_LEVEL_HIGH>;
 		};
 
+		sysreg_peric0: syscon@10410000 {
+			compatible = "samsung,exynos9810-peric0-sysreg", "syscon";
+			reg = <0x10410000 0x2000>;
+			clocks = <&cmu_peric0 CLK_GOUT_PERIC0_SYSREG_PCLK>;
+		};
+
+		cmu_peric0: clock-controller@10400000 {
+			compatible = "samsung,exynos9810-cmu-peric0";
+			reg = <0x10400000 0x8000>;
+			clocks = <&oscclk>, <&peric0_bus_clk>, <&peric0_ip_clk>;
+			clock-names = "oscclk", "bus", "ip";
+			#clock-cells = <1>;
+			assigned-clocks = <&cmu_peric0 CLK_MOUT_PERIC0_BUS_USER>,
+					  <&cmu_peric0 CLK_MOUT_PERIC0_IP_USER>;
+			assigned-clock-parents = <&peric0_bus_clk>,
+						 <&peric0_ip_clk>;
+		};
+
+		usi_hsi2c_10: usi@104b00c0 {
+			compatible = "samsung,exynos9810-usi",
+				     "samsung,exynos850-usi";
+			reg = <0x104b00c0 0x20>;
+			samsung,sysreg = <&sysreg_peric0 0x101c>;
+			samsung,mode = <USI_MODE_I2C>;
+			clocks = <&cmu_peric0 CLK_GOUT_PERIC0_USI03_PCLK>,
+				 <&cmu_peric0 CLK_GOUT_PERIC0_USI03_IPCLK>;
+			clock-names = "pclk", "ipclk";
+
+			#address-cells = <1>;
+			#size-cells = <1>;
+			ranges;
+
+			status = "disabled";
+
+			hsi2c_10: i2c@104b0000 {
+				compatible = "samsung,exynos9810-hsi2c",
+					     "samsung,exynos8895-hsi2c";
+				reg = <0x104b0000 0xc0>;
+				interrupts = <GIC_SPI 404 IRQ_TYPE_LEVEL_HIGH>;
+				clocks = <&cmu_peric0 CLK_GOUT_PERIC0_USI03_IPCLK>,
+					 <&cmu_peric0 CLK_GOUT_PERIC0_USI03_PCLK>;
+				clock-names = "hsi2c", "hsi2c_pclk";
+				clock-frequency = <400000>;
+				pinctrl-0 = <&hsi2c10_bus>;
+				pinctrl-names = "default";
+
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				status = "disabled";
+			};
+		};
+
 		pinctrl_peric1: pinctrl@10830000 {
 			compatible = "samsung,exynos9810-pinctrl";
 			reg = <0x10830000 0x1000>;
 			interrupts = <GIC_SPI 421 IRQ_TYPE_LEVEL_HIGH>;
 		};
 
+		usbdrd: usb@10c00000 {
+			compatible = "snps,dwc3";
+			reg = <0x10c00000 0x10000>;
+			interrupts = <GIC_SPI 244 IRQ_TYPE_LEVEL_HIGH>;
+			phys = <&usbdrd_phy 0>;
+			phy-names = "usb2-phy";
+			dr_mode = "peripheral";
+			maximum-speed = "high-speed";
+			snps,dis-u2-freeclk-exists-quirk;
+			snps,quirk-frame-length-adjustment = <0x20>;
+			status = "disabled";
+		};
+
 		pinctrl_fsys0: pinctrl@11050000 {
 			compatible = "samsung,exynos9810-pinctrl";
 			reg = <0x11050000 0x1000>;
 			interrupts = <GIC_SPI 243 IRQ_TYPE_LEVEL_HIGH>;
+		};
+
+		usbdrd_phy: phy@11100000 {
+			compatible = "samsung,exynos9810-usbdrd-phy";
+			reg = <0x11100000 0x200>;
+			/* TODO: replace the PHY gate once CMU_FSYS0 is supported. */
+			clocks = <&oscclk>, <&oscclk>;
+			clock-names = "phy", "ref";
+			samsung,pmu-syscon = <&pmu_system_controller>;
+			#phy-cells = <1>;
+			status = "disabled";
 		};
 
 		pinctrl_fsys1: pinctrl@11430000 {

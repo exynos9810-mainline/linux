@@ -10,6 +10,7 @@
 #include "exynos9810.dtsi"
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/input/input.h>
+#include <dt-bindings/interrupt-controller/irq.h>
 
 / {
 	model = "Samsung Galaxy S9 (SM-G960F)";
@@ -20,6 +21,7 @@
 		#address-cells = <2>;
 		#size-cells = <1>;
 		ranges;
+		bootargs = "console=tty0 loglevel=8 maxcpus=1";
 
 		framebuffer@cc000000 {
 			compatible = "simple-framebuffer";
@@ -81,6 +83,35 @@
 			reg = <0x0 0xcc000000 (1440 * 2960 * 4)>;
 			no-map;
 		};
+
+		ramoops@fed10000 {
+			compatible = "ramoops";
+			reg = <0x0 0xfed10000 0x8000>;
+			record-size = <0x4000>;
+			console-size = <0x4000>;
+		};
+	};
+};
+
+&acpm_ipc {
+	pmic {
+		compatible = "samsung,s2mps18-pmic";
+
+		regulators {
+			tsp_io: ldo35 {
+				regulator-name = "tsp_io";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-boot-on;
+			};
+
+			tsp_avdd: ldo43 {
+				regulator-name = "tsp_avdd";
+				regulator-min-microvolt = <3000000>;
+				regulator-max-microvolt = <3000000>;
+				regulator-boot-on;
+			};
+		};
 	};
 };
 
@@ -88,7 +119,48 @@
 	clock-frequency = <26000000>;
 };
 
+&usbdrd {
+	status = "okay";
+};
+
+&usbdrd_phy {
+	status = "okay";
+};
+
+&usi_hsi2c_10 {
+	status = "okay";
+};
+
+&hsi2c_10 {
+	status = "okay";
+	samsung,stop-after-trans;
+
+	touchscreen@48 {
+		compatible = "samsung,s6sy761";
+		reg = <0x48>;
+
+		avdd-supply = <&tsp_avdd>;
+		vdd-supply = <&tsp_io>;
+
+		interrupt-parent = <&gpa1>;
+		interrupts = <0 IRQ_TYPE_LEVEL_LOW>;
+
+		pinctrl-0 = <&ts_int>;
+		pinctrl-names = "default";
+
+		touchscreen-size-x = <4096>;
+		touchscreen-size-y = <4096>;
+	};
+};
+
 &pinctrl_alive {
+	ts_int: ts-int-pins {
+		samsung,pins = "gpa1-0";
+		samsung,pin-function = <EXYNOS_PIN_FUNC_EINT>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
+		samsung,pin-drv = <EXYNOS5420_PIN_DRV_LV1>;
+	};
+
 	key_power: key-power-pins {
 		samsung,pins = "gpa2-4";
 		samsung,pin-function = <EXYNOS_PIN_FUNC_EINT>;
@@ -114,6 +186,15 @@
 		samsung,pins = "gpa0-6";
 		samsung,pin-function = <EXYNOS_PIN_FUNC_EINT>;
 		samsung,pin-pud = <EXYNOS_PIN_PULL_UP>;
+		samsung,pin-drv = <EXYNOS5420_PIN_DRV_LV1>;
+	};
+};
+
+&pinctrl_peric0 {
+	hsi2c10_bus: hsi2c10-bus-pins {
+		samsung,pins = "gpp1-4", "gpp1-5";
+		samsung,pin-function = <EXYNOS_PIN_FUNC_2>;
+		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
 		samsung,pin-drv = <EXYNOS5420_PIN_DRV_LV1>;
 	};
 };
