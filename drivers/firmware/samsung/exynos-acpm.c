@@ -40,6 +40,7 @@
 #define ACPM_TX_TIMEOUT_US		500000
 
 #define ACPM_GS101_INITDATA_BASE	0xa000
+#define ACPM_EXYNOS9810_INITDATA_BASE	0x7f00
 
 /**
  * struct acpm_shmem - shared memory configuration information.
@@ -742,17 +743,19 @@ static int acpm_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, acpm);
 
-	acpm_clk_pdev = platform_device_register_data(dev,
-						match_data->acpm_clk_dev_name,
-						PLATFORM_DEVID_NONE, NULL, 0);
-	if (IS_ERR(acpm_clk_pdev))
-		return dev_err_probe(dev, PTR_ERR(acpm_clk_pdev),
-				     "Failed to register ACPM clocks device.\n");
+	if (match_data->acpm_clk_dev_name) {
+		acpm_clk_pdev = platform_device_register_data(dev,
+							match_data->acpm_clk_dev_name,
+							PLATFORM_DEVID_NONE, NULL, 0);
+		if (IS_ERR(acpm_clk_pdev))
+			return dev_err_probe(dev, PTR_ERR(acpm_clk_pdev),
+					     "Failed to register ACPM clocks device.\n");
 
-	ret = devm_add_action_or_reset(dev, acpm_clk_pdev_unregister,
-				       acpm_clk_pdev);
-	if (ret)
-		return dev_err_probe(dev, ret, "Failed to add devm action.\n");
+		ret = devm_add_action_or_reset(dev, acpm_clk_pdev_unregister,
+					       acpm_clk_pdev);
+		if (ret)
+			return dev_err_probe(dev, ret, "Failed to add devm action.\n");
+	}
 
 	return devm_of_platform_populate(dev);
 }
@@ -881,10 +884,18 @@ static const struct acpm_match_data acpm_gs101 = {
 	.acpm_clk_dev_name = "gs101-acpm-clk",
 };
 
+static const struct acpm_match_data acpm_exynos9810 = {
+	.initdata_base = ACPM_EXYNOS9810_INITDATA_BASE,
+};
+
 static const struct of_device_id acpm_match[] = {
 	{
 		.compatible = "google,gs101-acpm-ipc",
 		.data = &acpm_gs101,
+	},
+	{
+		.compatible = "samsung,exynos9810-acpm-ipc",
+		.data = &acpm_exynos9810,
 	},
 	{},
 };
