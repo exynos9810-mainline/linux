@@ -103,6 +103,8 @@ struct s6sy761_data {
 	struct regulator_bulk_data regulators[2];
 	struct input_dev *input;
 	struct touchscreen_properties prop;
+	bool powered;
+	bool irq_requested;
 
 	u8 data[S6SY761_EVENT_SIZE * S6SY761_EVENT_COUNT];
 
@@ -298,6 +300,7 @@ static int s6sy761_power_on(struct s6sy761_data *sdata)
 				    sdata->regulators);
 	if (ret)
 		return ret;
+	sdata->powered = true;
 
 	msleep(140);
 
@@ -381,9 +384,14 @@ static void s6sy761_power_off(void *data)
 {
 	struct s6sy761_data *sdata = data;
 
-	disable_irq(sdata->client->irq);
+	if (!sdata->powered)
+		return;
+
+	if (sdata->irq_requested)
+		disable_irq(sdata->client->irq);
 	regulator_bulk_disable(ARRAY_SIZE(sdata->regulators),
 						sdata->regulators);
+	sdata->powered = false;
 }
 
 static int s6sy761_probe(struct i2c_client *client)
@@ -439,8 +447,8 @@ static int s6sy761_probe(struct i2c_client *client)
 
 	touchscreen_parse_properties(sdata->input, true, &sdata->prop);
 
-	if (!input_abs_get_max(sdata->input, ABS_X) ||
-	    !input_abs_get_max(sdata->input, ABS_Y)) {
+	if (!input_abs_get_max(sdata->input, ABS_MT_POSITION_X) ||
+	    !input_abs_get_max(sdata->input, ABS_MT_POSITION_Y)) {
 		dev_warn(&client->dev, "the axis have not been set\n");
 	}
 
@@ -461,6 +469,7 @@ static int s6sy761_probe(struct i2c_client *client)
 					"s6sy761_irq", sdata);
 	if (err)
 		return err;
+	sdata->irq_requested = true;
 
 	pm_runtime_enable(&client->dev);
 
