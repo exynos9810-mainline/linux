@@ -203,12 +203,18 @@
 #define LINKCTRL_FORCE_RXELECIDLE		BIT(18)
 #define LINKCTRL_FORCE_PHYSTATUS		BIT(17)
 #define LINKCTRL_FORCE_PIPE_EN			BIT(16)
+#define LINKCTRL_DIS_QACT_LINKGATE		BIT(12)
+#define LINKCTRL_DIS_QACT_ID0			BIT(11)
+#define LINKCTRL_DIS_QACT_VBUS_VALID		BIT(10)
+#define LINKCTRL_DIS_QACT_BVALID		BIT(9)
 #define LINKCTRL_FORCE_QACT			BIT(8)
 #define LINKCTRL_BUS_FILTER_BYPASS		GENMASK(7, 4)
 
 #define EXYNOS850_DRD_LINKPORT			0x08
 #define LINKPORT_HOST_NUM_U3			GENMASK(19, 16)
 #define LINKPORT_HOST_NUM_U2			GENMASK(15, 12)
+#define LINKPORT_HOST_PORT_SEL_OCD_U3		BIT(3)
+#define LINKPORT_HOST_PORT_SEL_OCD_U2		BIT(2)
 
 #define EXYNOS850_DRD_CLKRST			0x20
 /*
@@ -1516,6 +1522,77 @@ exynos5_usbdrd_usb_v3p1_pipe_override(struct exynos5_usbdrd_phy *phy_drd)
 	writel(reg, regs_base + EXYNOS850_DRD_SECPMACTL);
 }
 
+static void exynos9810_usbdrd_utmi_init(struct exynos5_usbdrd_phy *phy_drd)
+{
+	void __iomem *regs_base = phy_drd->reg_phy;
+	u32 reg;
+
+	/* Disable hardware clock gating and force the Q-Channel active. */
+	reg = readl(regs_base + EXYNOS850_DRD_LINKCTRL);
+	reg |= LINKCTRL_DIS_QACT_LINKGATE | LINKCTRL_DIS_QACT_ID0 |
+	       LINKCTRL_DIS_QACT_VBUS_VALID | LINKCTRL_DIS_QACT_BVALID;
+	reg &= ~LINKCTRL_FORCE_QACT;
+	fsleep(500);
+	writel(reg, regs_base + EXYNOS850_DRD_LINKCTRL);
+	fsleep(500);
+	reg |= LINKCTRL_FORCE_QACT;
+	fsleep(500);
+	writel(reg, regs_base + EXYNOS850_DRD_LINKCTRL);
+
+	/* Reset the link, then assert the PHY reset. */
+	reg = readl(regs_base + EXYNOS850_DRD_CLKRST);
+	reg |= CLKRST_LINK_SW_RST;
+	writel(reg, regs_base + EXYNOS850_DRD_CLKRST);
+	fsleep(10);
+	reg &= ~CLKRST_LINK_SW_RST;
+	writel(reg, regs_base + EXYNOS850_DRD_CLKRST);
+
+	reg |= CLKRST_PHY_RESET_SEL | CLKRST_PHY_SW_RST;
+	writel(reg, regs_base + EXYNOS850_DRD_CLKRST);
+
+	/* Power up and enable the USB2 PHY. */
+	reg = readl(regs_base + EXYNOS850_DRD_HSP_TEST);
+	reg &= ~HSP_TEST_SIDDQ;
+	writel(reg, regs_base + EXYNOS850_DRD_HSP_TEST);
+
+	reg = readl(regs_base + EXYNOS850_DRD_UTMI);
+	reg &= ~(UTMI_FORCE_SUSPEND | UTMI_FORCE_SLEEP | UTMI_DP_PULLDOWN |
+		 UTMI_DM_PULLDOWN);
+	writel(reg, regs_base + EXYNOS850_DRD_UTMI);
+
+	reg = readl(regs_base + EXYNOS850_DRD_HSP);
+	reg |= HSP_EN_UTMISUSPEND | HSP_COMMONONN;
+	writel(reg, regs_base + EXYNOS850_DRD_HSP);
+
+	exynos5_usbdrd_apply_phy_tunes(phy_drd, PTS_UTMI_POSTINIT);
+
+	fsleep(100);
+	reg = readl(regs_base + EXYNOS850_DRD_CLKRST);
+	reg |= CLKRST_PHY_RESET_SEL;
+	reg &= ~(CLKRST_PHY_SW_RST | CLKRST_PORT_RST);
+	writel(reg, regs_base + EXYNOS850_DRD_CLKRST);
+
+	/* starlte does not use the controller's external VBUS-valid pad. */
+	reg = readl(regs_base + EXYNOS850_DRD_LINKCTRL);
+	reg |= FIELD_PREP(LINKCTRL_BUS_FILTER_BYPASS, 0xf);
+	writel(reg, regs_base + EXYNOS850_DRD_LINKCTRL);
+
+	reg = readl(regs_base + EXYNOS850_DRD_UTMI);
+	reg |= UTMI_FORCE_BVALID | UTMI_FORCE_VBUSVALID;
+	writel(reg, regs_base + EXYNOS850_DRD_UTMI);
+
+	reg = readl(regs_base + EXYNOS850_DRD_HSP);
+	reg |= HSP_VBUSVLDEXT | HSP_VBUSVLDEXTSEL;
+	writel(reg, regs_base + EXYNOS850_DRD_HSP);
+
+	reg = readl(regs_base + EXYNOS850_DRD_LINKPORT);
+	reg |= LINKPORT_HOST_PORT_SEL_OCD_U3 | LINKPORT_HOST_PORT_SEL_OCD_U2;
+	writel(reg, regs_base + EXYNOS850_DRD_LINKPORT);
+
+	/* Keep the unused SuperSpeed half in low power with PIPE overridden. */
+	exynos5_usbdrd_usb_v3p1_pipe_override(phy_drd);
+}
+
 static void exynos850_usbdrd_utmi_init(struct exynos5_usbdrd_phy *phy_drd)
 {
 	void __iomem *regs_base = phy_drd->reg_phy;
@@ -1681,9 +1758,50 @@ static int exynos850_usbdrd_phy_exit(struct phy *phy)
 	return 0;
 }
 
+static int exynos9810_usbdrd_phy_exit(struct phy *phy)
+{
+	struct phy_usb_instance *inst = phy_get_drvdata(phy);
+	struct exynos5_usbdrd_phy *phy_drd = to_usbdrd_phy(inst);
+	void __iomem *regs_base = phy_drd->reg_phy;
+	u32 reg;
+	int ret;
+
+	ret = clk_bulk_prepare_enable(phy_drd->drv_data->n_clks, phy_drd->clks);
+	if (ret)
+		return ret;
+
+	guard(mutex)(&phy_drd->phy_mutex);
+
+	reg = readl(regs_base + EXYNOS850_DRD_UTMI);
+	reg |= UTMI_FORCE_SUSPEND | UTMI_FORCE_SLEEP;
+	writel(reg, regs_base + EXYNOS850_DRD_UTMI);
+
+	reg = readl(regs_base + EXYNOS850_DRD_HSP_TEST);
+	reg |= HSP_TEST_SIDDQ;
+	writel(reg, regs_base + EXYNOS850_DRD_HSP_TEST);
+
+	reg = readl(regs_base + EXYNOS850_DRD_LINKCTRL);
+	reg &= ~LINKCTRL_FORCE_QACT;
+	reg |= LINKCTRL_DIS_QACT_LINKGATE | LINKCTRL_DIS_QACT_ID0 |
+	       LINKCTRL_DIS_QACT_VBUS_VALID | LINKCTRL_DIS_QACT_BVALID;
+	writel(reg, regs_base + EXYNOS850_DRD_LINKCTRL);
+
+	clk_bulk_disable_unprepare(phy_drd->drv_data->n_clks, phy_drd->clks);
+
+	return 0;
+}
+
 static const struct phy_ops exynos850_usbdrd_phy_ops = {
 	.init		= exynos850_usbdrd_phy_init,
 	.exit		= exynos850_usbdrd_phy_exit,
+	.power_on	= exynos5_usbdrd_phy_power_on,
+	.power_off	= exynos5_usbdrd_phy_power_off,
+	.owner		= THIS_MODULE,
+};
+
+static const struct phy_ops exynos9810_usbdrd_phy_ops = {
+	.init		= exynos850_usbdrd_phy_init,
+	.exit		= exynos9810_usbdrd_phy_exit,
 	.power_on	= exynos5_usbdrd_phy_power_on,
 	.power_off	= exynos5_usbdrd_phy_power_off,
 	.owner		= THIS_MODULE,
@@ -1950,6 +2068,14 @@ static const struct exynos5_usbdrd_phy_config phy_cfg_exynos850[] = {
 	},
 };
 
+static const struct exynos5_usbdrd_phy_config phy_cfg_exynos9810[] = {
+	{
+		.id		= EXYNOS5_DRDPHY_UTMI,
+		.phy_isol	= exynos5_usbdrd_phy_isol,
+		.phy_init	= exynos9810_usbdrd_utmi_init,
+	},
+};
+
 static
 const struct exynos5_usbdrd_phy_tuning exynos7870_tunes_utmi_postinit[] = {
 	PHY_TUNING_ENTRY_PHY(EXYNOS5_DRD_PHYPARAM0,
@@ -2077,6 +2203,35 @@ static const struct exynos5_usbdrd_phy_drvdata exynos850_usbdrd_phy = {
 	.n_core_clks		= ARRAY_SIZE(exynos5_core_clk_names),
 	.regulator_names	= exynos5_regulator_names,
 	.n_regulators		= ARRAY_SIZE(exynos5_regulator_names),
+};
+
+static const struct exynos5_usbdrd_phy_tuning exynos9810_tunes_utmi_postinit[] = {
+	PHY_TUNING_ENTRY_PHY(EXYNOS850_DRD_HSPPARACON,
+			     (HSPPARACON_TXVREF | HSPPARACON_TXRISE |
+			      HSPPARACON_TXRES | HSPPARACON_TXPREEMPAMP |
+			      HSPPARACON_SQRX | HSPPARACON_COMPDIS),
+			     (FIELD_PREP_CONST(HSPPARACON_TXVREF, 7) |
+			      FIELD_PREP_CONST(HSPPARACON_TXRISE, 1) |
+			      FIELD_PREP_CONST(HSPPARACON_TXRES, 1) |
+			      FIELD_PREP_CONST(HSPPARACON_TXPREEMPAMP, 3) |
+			      FIELD_PREP_CONST(HSPPARACON_SQRX, 6) |
+			      FIELD_PREP_CONST(HSPPARACON_COMPDIS, 7))),
+	PHY_TUNING_ENTRY_LAST
+};
+
+static const struct exynos5_usbdrd_phy_tuning *exynos9810_tunes[PTS_MAX] = {
+	[PTS_UTMI_POSTINIT] = exynos9810_tunes_utmi_postinit,
+};
+
+static const struct exynos5_usbdrd_phy_drvdata exynos9810_usbdrd_phy = {
+	.phy_cfg		= phy_cfg_exynos9810,
+	.phy_ops		= &exynos9810_usbdrd_phy_ops,
+	.phy_tunes		= exynos9810_tunes,
+	.pmu_offset_usbdrd0_phy	= EXYNOS9810_PHY_CTRL_USB20,
+	.clk_names		= exynos5_clk_names,
+	.n_clks		= ARRAY_SIZE(exynos5_clk_names),
+	.core_clk_names		= exynos5_core_clk_names,
+	.n_core_clks		= ARRAY_SIZE(exynos5_core_clk_names),
 };
 
 static const struct exynos5_usbdrd_phy_tuning exynos990_tunes_utmi_postinit[] = {
@@ -2900,6 +3055,9 @@ static const struct of_device_id exynos5_usbdrd_phy_of_match[] = {
 	}, {
 		.compatible = "samsung,exynos850-usbdrd-phy",
 		.data = &exynos850_usbdrd_phy
+	}, {
+		.compatible = "samsung,exynos9810-usbdrd-phy",
+		.data = &exynos9810_usbdrd_phy
 	}, {
 		.compatible = "samsung,exynos990-usbdrd-phy",
 		.data = &exynos990_usbdrd_phy
