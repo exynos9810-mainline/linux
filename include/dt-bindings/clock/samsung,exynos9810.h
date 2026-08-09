@@ -1,0 +1,20 @@
+/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
+/*
+ * Device Tree binding constants for the Exynos9810 clock controller.
+ */
+
+#ifndef _DT_BINDINGS_CLOCK_EXYNOS9810_H
+#define _DT_BINDINGS_CLOCK_EXYNOS9810_H
+
+/* CMU_PERIC0 */
+#define CLK_GATE_PERIC0_USI03			1
+#define CLK_GOUT_PERIC0_USI03_IPCLK		2
+#define CLK_GOUT_PERIC0_USI03_PCLK		3
+#define CLK_GOUT_PERIC0_SYSREG_PCLK		4
+#define CLK_GOUT_PERIC0_USI03_RSTNSYNC		5
+#define CLK_MOUT_PERIC0_BUS_USER			6
+#define CLK_MOUT_PERIC0_IP_USER			7
+#define CLK_GOUT_PERIC0_USI03_QCH		8
+#define CLK_GOUT_PERIC0_SYSREG_QCH		9
+
+#endif /* _DT_BINDINGS_CLOCK_EXYNOS9810_H */
