@@ -1469,6 +1469,16 @@ config REGULATOR_S2MPS11
 	 Buck converters including Dual-Phase Buck converter, Buck-Boost
 	 converter, various LDOs.
 
+config REGULATOR_S2MPS18
+	tristate "Samsung S2MPS18 voltage regulator"
+	depends on EXYNOS_ACPM_PROTOCOL
+	depends on OF
+	help
+	  Support regulators in the Samsung S2MPS18 PMIC through the Exynos
+	  ACPM firmware interface. The firmware owns the physical PMIC bus and
+	  provides register access to the kernel. This driver exposes those
+	  firmware-managed outputs through the regulator framework.
+
 config REGULATOR_S5M8767
 	tristate "Samsung S5M8767A voltage regulator"
 	depends on MFD_SEC_CORE || COMPILE_TEST
