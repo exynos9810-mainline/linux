@@ -16,13 +16,14 @@
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 
-#define EXYNOS_MBOX_INTMR0		0x28	/* Interrupt Mask Register 0 */
-#define EXYNOS_MBOX_INTGR1		0x40	/* Interrupt Generation Register 1 */
-
 #define EXYNOS_MBOX_INTMR0_MASK		GENMASK(15, 0)
-#define EXYNOS_MBOX_INTGR1_MASK		GENMASK(15, 0)
+#define EXYNOS_MBOX_CHAN_COUNT		HWEIGHT32(EXYNOS_MBOX_INTMR0_MASK)
 
-#define EXYNOS_MBOX_CHAN_COUNT		HWEIGHT32(EXYNOS_MBOX_INTGR1_MASK)
+struct exynos_mbox_variant {
+	u32 intmr;
+	u32 intgr;
+	u8 intgr_shift;
+};
 
 /**
  * struct exynos_mbox - driver's private data.
@@ -32,6 +33,7 @@
 struct exynos_mbox {
 	void __iomem *regs;
 	struct mbox_controller *mbox;
+	const struct exynos_mbox_variant *variant;
 };
 
 static int exynos_mbox_send_data(struct mbox_chan *chan, void *data)
@@ -50,7 +52,8 @@ static int exynos_mbox_send_data(struct mbox_chan *chan, void *data)
 		return -EINVAL;
 	}
 
-	writel(BIT(msg->chan_id), exynos_mbox->regs + EXYNOS_MBOX_INTGR1);
+	writel(BIT(msg->chan_id + exynos_mbox->variant->intgr_shift),
+	       exynos_mbox->regs + exynos_mbox->variant->intgr);
 
 	return 0;
 }
@@ -79,8 +82,20 @@ static struct mbox_chan *exynos_mbox_of_xlate(struct mbox_controller *mbox,
 	return ERR_PTR(-EINVAL);
 }
 
+static const struct exynos_mbox_variant gs101_mbox_data = {
+	.intmr = 0x28,
+	.intgr = 0x40,
+};
+
+static const struct exynos_mbox_variant exynos9810_mbox_data = {
+	.intmr = 0x24,
+	.intgr = 0x08,
+	.intgr_shift = 16,
+};
+
 static const struct of_device_id exynos_mbox_match[] = {
-	{ .compatible = "google,gs101-mbox" },
+	{ .compatible = "google,gs101-mbox", .data = &gs101_mbox_data },
+	{ .compatible = "samsung,exynos9810-mbox", .data = &exynos9810_mbox_data },
 	{},
 };
 MODULE_DEVICE_TABLE(of, exynos_mbox_match);
@@ -96,6 +111,9 @@ static int exynos_mbox_probe(struct platform_device *pdev)
 	exynos_mbox = devm_kzalloc(dev, sizeof(*exynos_mbox), GFP_KERNEL);
 	if (!exynos_mbox)
 		return -ENOMEM;
+	exynos_mbox->variant = device_get_match_data(dev);
+	if (!exynos_mbox->variant)
+		return -EINVAL;
 
 	mbox = devm_kzalloc(dev, sizeof(*mbox), GFP_KERNEL);
 	if (!mbox)
@@ -126,7 +144,8 @@ static int exynos_mbox_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, exynos_mbox);
 
 	/* Mask out all interrupts. We support just polling channels for now. */
-	writel(EXYNOS_MBOX_INTMR0_MASK, exynos_mbox->regs + EXYNOS_MBOX_INTMR0);
+	writel(EXYNOS_MBOX_INTMR0_MASK,
+	       exynos_mbox->regs + exynos_mbox->variant->intmr);
 
 	return devm_mbox_controller_register(dev, mbox);
 }
