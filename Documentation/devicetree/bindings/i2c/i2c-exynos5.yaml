@@ -36,6 +36,7 @@ properties:
       - items:
           - enum:
               - samsung,exynos8890-hsi2c
+              - samsung,exynos9810-hsi2c
           - const: samsung,exynos8895-hsi2c
       - items:
           - enum:
@@ -63,6 +64,13 @@ properties:
       If specified, the bus operates in high-speed mode only if the
       clock-frequency is >= 1MHz.
 
+  samsung,stop-after-trans:
+    type: boolean
+    description:
+      Send a STOP condition after each message, including non-final messages
+      in a transfer. This is required by some Exynos9810 peripherals whose
+      first message otherwise leaves the controller waiting for a command.
+
   clocks:
     minItems: 1
     items:
@@ -88,6 +96,7 @@ allOf:
         compatible:
           contains:
             enum:
+              - samsung,exynos9810-hsi2c
               - samsung,exynosautov9-hsi2c
 
     then:
