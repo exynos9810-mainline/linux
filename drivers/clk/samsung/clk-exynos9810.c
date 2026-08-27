@@ -15,6 +15,7 @@
 #include "clk-exynos-arm64.h"
 
 #define CLKS_NR_PERIC0	(CLK_GOUT_PERIC0_SYSREG_QCH + 1)
+#define CLKS_NR_FSYS0	(CLK_GOUT_FSYS0_SYSREG_QCH + 1)
 
 /* CMU_PERIC0 (0x10400000) */
 #define PLL_CON0_MUX_CLKCMU_PERIC0_BUS_USER		0x0100
@@ -86,6 +87,55 @@ static const struct samsung_cmu_info peric0_cmu_info __initconst = {
 	.clk_name		= "bus",
 };
 
+/* CMU_FSYS0 (0x11000000) */
+#define PLL_CON0_MUX_CLKCMU_FSYS0_BUS_USER		0x0100
+#define PLL_CON0_MUX_CLKCMU_FSYS0_UFS_EMBD_USER		0x0180
+#define CLK_CON_GAT_GOUT_FSYS0_UFS_EMBD_UNIPRO		0x205c
+#define QCH_CON_SYSREG_FSYS0_QCH				0x3040
+#define QCH_CON_UFS_EMBD_QCH				0x3044
+
+static const unsigned long fsys0_clk_regs[] __initconst = {
+	PLL_CON0_MUX_CLKCMU_FSYS0_BUS_USER,
+	PLL_CON0_MUX_CLKCMU_FSYS0_UFS_EMBD_USER,
+	CLK_CON_GAT_GOUT_FSYS0_UFS_EMBD_UNIPRO,
+	QCH_CON_SYSREG_FSYS0_QCH,
+	QCH_CON_UFS_EMBD_QCH,
+};
+
+PNAME(mout_fsys0_bus_user_p) = { "oscclk", "fsys0_bus" };
+PNAME(mout_fsys0_ufs_embd_user_p) = { "oscclk", "fsys0_ufs" };
+
+static const struct samsung_mux_clock fsys0_mux_clks[] __initconst = {
+	nMUX(CLK_MOUT_FSYS0_BUS_USER, "mout_fsys0_bus_user",
+	     mout_fsys0_bus_user_p, PLL_CON0_MUX_CLKCMU_FSYS0_BUS_USER,
+	     4, 1),
+	nMUX(CLK_MOUT_FSYS0_UFS_EMBD_USER, "mout_fsys0_ufs_embd_user",
+	     mout_fsys0_ufs_embd_user_p,
+	     PLL_CON0_MUX_CLKCMU_FSYS0_UFS_EMBD_USER, 4, 1),
+};
+
+static const struct samsung_gate_clock fsys0_gate_clks[] __initconst = {
+	GATE(CLK_GOUT_FSYS0_UFS_EMBD_QCH, "gout_fsys0_ufs_embd_qch",
+	     "mout_fsys0_ufs_embd_user", QCH_CON_UFS_EMBD_QCH, 0, 0, 0),
+	GATE(CLK_GOUT_FSYS0_UFS_EMBD_UNIPRO,
+	     "gout_fsys0_ufs_embd_unipro", "mout_fsys0_ufs_embd_user",
+	     CLK_CON_GAT_GOUT_FSYS0_UFS_EMBD_UNIPRO, 21, 0, 0),
+	GATE(CLK_GOUT_FSYS0_SYSREG_QCH, "gout_fsys0_sysreg_qch",
+	     "mout_fsys0_bus_user", QCH_CON_SYSREG_FSYS0_QCH, 0,
+	     CLK_IS_CRITICAL, 0),
+};
+
+static const struct samsung_cmu_info fsys0_cmu_info __initconst = {
+	.mux_clks		= fsys0_mux_clks,
+	.nr_mux_clks		= ARRAY_SIZE(fsys0_mux_clks),
+	.gate_clks		= fsys0_gate_clks,
+	.nr_gate_clks		= ARRAY_SIZE(fsys0_gate_clks),
+	.nr_clk_ids		= CLKS_NR_FSYS0,
+	.clk_regs		= fsys0_clk_regs,
+	.nr_clk_regs		= ARRAY_SIZE(fsys0_clk_regs),
+	.clk_name		= "bus",
+};
+
 static int __init exynos9810_cmu_probe(struct platform_device *pdev)
 {
 	const struct samsung_cmu_info *info;
@@ -98,6 +148,10 @@ static int __init exynos9810_cmu_probe(struct platform_device *pdev)
 }
 
 static const struct of_device_id exynos9810_cmu_of_match[] = {
+	{
+		.compatible = "samsung,exynos9810-cmu-fsys0",
+		.data = &fsys0_cmu_info,
+	},
 	{
 		.compatible = "samsung,exynos9810-cmu-peric0",
 		.data = &peric0_cmu_info,
