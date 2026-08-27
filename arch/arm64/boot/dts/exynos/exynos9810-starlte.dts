@@ -91,6 +91,14 @@
 			console-size = <0x4000>;
 		};
 	};
+
+	ufs_vcc: regulator-ufs-vcc {
+		compatible = "regulator-fixed";
+		regulator-name = "ufs-vcc";
+		gpio = <&gpd0 2 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-boot-on;
+	};
 };
 
 &acpm_ipc {
@@ -124,6 +132,15 @@
 };
 
 &usbdrd_phy {
+	status = "okay";
+};
+
+&ufs {
+	vcc-supply = <&ufs_vcc>;
+	status = "okay";
+};
+
+&ufs_phy {
 	status = "okay";
 };
 
